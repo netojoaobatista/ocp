@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="OCP" default="phpunit">
+    <target name="build" depends="test" />
+    <target name="test" depends="prepare,phpcpd,phpmd,pdepend,phpunit" />
+
+    <target name="clean">
+        <delete dir="${basedir}/build"/>
+        <delete dir="${basedir}/vendor"/>
+        <delete file="${basedir}/composer.lock"/>
+    </target>
+
+    <target name="prepare" depends="composer">
+        <mkdir dir="${basedir}/build"/>
+        <mkdir dir="${basedir}/build/pdepend"/>
+        <mkdir dir="${basedir}/build/coverage"/>
+    </target>
+
+    <target name="composer">
+        <exec executable="composer" failonerror="true">
+            <arg value="--dev" />
+            <arg value="install" />
+        </exec>
+    </target>
+
+    <target name="pdepend" depends="prepare">
+        <exec executable="${basedir}/vendor/bin/pdepend">
+            <arg value="--summary-xml=${basedir}/build/pdepend/summary.xml" />
+            <arg value="--jdepend-chart=${basedir}/build/pdepend/dependencies.svg" />
+            <arg value="--overview-pyramid=${basedir}/build/pdepend/overview-pyramid.svg" />
+            <arg value="--ignore=${basedir}/vendor" />
+            <arg path="${basedir}/src" />
+        </exec>
+    </target>
+
+    <target name="phpmd" depends="prepare">
+        <exec executable="${basedir}/vendor/bin/phpmd">
+            <arg path="${basedir}/src" />
+            <arg value="text" />
+            <arg value="codesize,design,unusedcode,naming" />
+            <arg value="--reportfile" />
+            <arg value="php://stdout" />
+            <arg value="--exclude" />
+            <arg value="${basedir}/vendor,${basedir}/build" />
+        </exec>
+    </target>
+
+    <target name="phpcpd" depends="prepare">
+        <exec executable="${basedir}/vendor/bin/phpcpd">
+            <arg value="--exclude" />
+            <arg value="${basedir}/vendor" />
+            <arg value="--exclude" />
+            <arg value="${basedir}/build" />
+            <arg path="${basedir}/src" />
+        </exec>
+    </target>
+
+    <target name="phpunit" depends="prepare">
+        <exec executable="${basedir}/vendor/bin/phpunit" failonerror="true">
+            <arg value="--coverage-html" />
+            <arg value="${basedir}/build/coverage" />
+            <arg value="--testdox-html" />
+            <arg value="${basedir}/build/testdox" />
+        </exec>
+    </target>
+</project>

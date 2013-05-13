@@ -1,0 +1,20 @@
+{
+    "name": "netojoaobatista / ocp",
+    "description": "Refatoração O.C.P. - ShippingMethod",
+    "homepage": "https://github.com/netojoaobatista/ocp",
+    "require": {
+        "php": ">=5.4"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "3.7@stable",
+        "phpmd/phpmd" : "1.4.*",
+        "sebastian/phpcpd": "1.4.*",
+        "sebastian/finder-facade": "dev-master",
+        "theseer/fdomdocument": "dev-master"
+    },
+    "autoload": {
+        "psr-0": {
+            "": ["src/", "tests/"]
+        }
+    }
+}
