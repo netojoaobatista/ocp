@@ -17,88 +17,141 @@ Vamos imaginar que tenhamos um E-Commerce que utiliza um serviço, inicialmente 
 
 ### O código original
 
-    <?php
-    namespace Neto\Commerce;
+```php
+<?php
+namespace Neto\Commerce;
 
-    class ShoppingCart implements \Countable, \IteratorAggregate
+class ShoppingCart implements \Countable, \IteratorAggregate
+{
+    private $items = array();
+    private $quantities = array();
+
+    public function addItem(Product $product, $quantity = 1)
     {
-        private $items = array();
-        private $quantities = array();
+        $productId = $product->getProductId();
 
-        public function addItem(Product $product, $quantity = 1)
-        {
-            $productId = $product->getProductId();
+        if (isset($this->items[$productId])) {
+            $quantity += $this->quantities[$productId];
+        }
 
-            if (isset($this->items[$productId])) {
-                $quantity += $this->quantities[$productId];
+        $this->items[$productId] = $product;
+        $this->quantities[$productId] = $quantity;
+    }
+
+    /**
+     * @see \Countable::count()
+     */
+    public function count()
+    {
+        return count($this->items);
+    }
+
+    public function getItemAmount($productId)
+    {
+        if (!isset($this->items[$productId])) {
+            throw new \UnexpectedValueException('Item not found');
+        }
+
+        $quantity = $this->quantities[$productId];
+
+        return $quantity * $this->getItemPrice($productId);
+    }
+
+    public function getItemPrice($productId)
+    {
+        if (!isset($this->items[$productId])) {
+            throw new \UnexpectedValueException('Item not found');
+        }
+
+        return $this->items[$productId]->getProductPrice();
+    }
+
+    public function getItemQuantity($productId)
+    {
+        if (!isset($this->quantities[$productId])) {
+            return 0;
+        }
+
+        return $this->quantities[$productId];
+    }
+
+    public function getItemTotal()
+    {
+        $total = 0;
+
+        foreach ($this->items as $productId => $item) {
+            $total += $this->getItemAmount($productId);
+        }
+
+        return $total;
+    }
+
+    /**
+     * @see \IteratorAggregate::getIterator()
+     */
+    public function getIterator()
+    {
+        return new \ArrayIterator($this->items);
+    }
+
+    public function getShippingAmount($shippingFrom, $shippingTo)
+    {
+        if ($this->count() == 0) {
+            return 0;
+        }
+
+        $weight = 0;
+        $height = 0;
+        $width = 0;
+        $length = 0;
+
+        foreach ($this->items as $productId => $item) {
+            $weight += $this->quantities[$productId] * $item->getProductWeight();
+            $height += $this->quantities[$productId] * $item->getProductHeight();
+
+            $currentWidth = $item->getProductWidth();
+            $currentLength = $item->getProductLength();
+
+            if ($currentWidth > $width) {
+                $width = $currentWidth;
             }
 
-            $this->items[$productId] = $product;
-            $this->quantities[$productId] = $quantity;
-        }
-
-        /**
-         * @see \Countable::count()
-         */
-        public function count()
-        {
-            return count($this->items);
-        }
-
-        public function getItemAmount($productId)
-        {
-            if (!isset($this->items[$productId])) {
-                throw new \UnexpectedValueException('Item not found');
+            if ($currentLength > $length) {
+                $length = $currentLength;
             }
-
-            $quantity = $this->quantities[$productId];
-
-            return $quantity * $this->getItemPrice($productId);
         }
 
-        public function getItemPrice($productId)
-        {
-            if (!isset($this->items[$productId])) {
-                throw new \UnexpectedValueException('Item not found');
-            }
+        $ect = new \Neto\Commerce\Shipping\ECT();
 
-            return $this->items[$productId]->getProductPrice();
-        }
+        return $ect->getShippingAmount($shippingFrom,
+                                       $shippingTo,
+                                       $weight,
+                                       $height,
+                                       $width,
+                                       $length);
+    }
+}
+```
 
-        public function getItemQuantity($productId)
-        {
-            if (!isset($this->quantities[$productId])) {
-                return 0;
-            }
+### O problema
+Observando o método `ShoppingCart::getShippingAmount()`, veremos facilmente alguns problemas:
 
-            return $this->quantities[$productId];
-        }
+1. Existe um acoplamento muito alto com o participante new `\Neto\Commerce\Shipping\ECT`.
+2. A estratégia para o cálculo das dimensões da embalagem é muito frágil.
 
-        public function getItemTotal()
-        {
-            $total = 0;
+De fato, se observarmos atentamente, o acoplamento com o participante `ECT` é tão alto, que dificulta até os testes. Com o conhecimento específico sobre como mensurar o tamanho da embalagem e o participante ECT, o participante `ShoppingCart` toma decisões que tornarão a manutenção desse código extremamente difícil. De fato, se a empresa passar a fazer entregar com outro prestador de serviços, teremos que editar esse código.
 
-            foreach ($this->items as $productId => $item) {
-                $total += $this->getItemAmount($productId);
-            }
+O problema vai ficando maior, conforme novos prestadores de serviço de entrega vão sendo agregados à carteira de prestadores de serviço da empresa. Por exemplo, imaginem que, por uma questão de mercado, a loja passe a enviar os produtos com, além da ECT, também com a TRANSFOLHA ou outros serviços de logística. Se esse código não for refatorado rapidamente, sua rigidez pode causar edições semelhantes a:
 
-            return $total;
-        }
+```php
+public function getShippingAmount($shippingWith, $shippingFrom, $shippingTo)
+{
+    if ($this->count() == 0) {
+        return 0;
+    }
 
-        /**
-         * @see \IteratorAggregate::getIterator()
-         */
-        public function getIterator()
-        {
-            return new \ArrayIterator($this->items);
-        }
-
-        public function getShippingAmount($shippingFrom, $shippingTo)
-        {
-            if ($this->count() == 0) {
-                return 0;
-            }
-
+    switch ($shippingWith) {
+        case 'ECT':
             $weight = 0;
             $height = 0;
             $width = 0;
@@ -128,65 +181,15 @@ Vamos imaginar que tenhamos um E-Commerce que utiliza um serviço, inicialmente 
                                            $height,
                                            $width,
                                            $length);
-        }
+        case 'TransFolha':
+            //código para calcular frete com a TransFolha
+        case 'FreteFácil':
+            //código para calcular frete com PayPal Frete Fácil
+        case 'UPS':
+            //código para calcular frete com UPS
     }
-
-### O problema
-Observando o método `ShoppingCart::getShippingAmount()`, veremos facilmente alguns problemas:
-
-1. Existe um acoplamento muito alto com o participante new `\Neto\Commerce\Shipping\ECT`.
-2. A estratégia para o cálculo das dimensões da embalagem é muito frágil.
-
-De fato, se observarmos atentamente, o acoplamento com o participante `ECT` é tão alto, que dificulta até os testes. Com o conhecimento específico sobre como mensurar o tamanho da embalagem e o participante ECT, o participante `ShoppingCart` toma decisões que tornarão a manutenção desse código extremamente difícil. De fato, se a empresa passar a fazer entregar com outro prestador de serviços, teremos que editar esse código.
-
-O problema vai ficando maior, conforme novos prestadores de serviço de entrega vão sendo agregados à carteira de prestadores de serviço da empresa. Por exemplo, imaginem que, por uma questão de mercado, a loja passe a enviar os produtos com, além da ECT, também com a TRANSFOLHA ou outros serviços de logística. Se esse código não for refatorado rapidamente, sua rigidez pode causar edições semelhantes a:
-
-    public function getShippingAmount($shippingWith, $shippingFrom, $shippingTo)
-    {
-        if ($this->count() == 0) {
-            return 0;
-        }
-
-        switch ($shippingWith) {
-            case 'ECT':
-                $weight = 0;
-                $height = 0;
-                $width = 0;
-                $length = 0;
-
-                foreach ($this->items as $productId => $item) {
-                    $weight += $this->quantities[$productId] * $item->getProductWeight();
-                    $height += $this->quantities[$productId] * $item->getProductHeight();
-
-                    $currentWidth = $item->getProductWidth();
-                    $currentLength = $item->getProductLength();
-
-                    if ($currentWidth > $width) {
-                        $width = $currentWidth;
-                    }
-
-                    if ($currentLength > $length) {
-                        $length = $currentLength;
-                    }
-                }
-
-                $ect = new \Neto\Commerce\Shipping\ECT();
-
-                return $ect->getShippingAmount($shippingFrom,
-                                               $shippingTo,
-                                               $weight,
-                                               $height,
-                                               $width,
-                                               $length);
-            case 'TransFolha':
-                //código para calcular frete com a TransFolha
-            case 'FreteFácil':
-                //código para calcular frete com PayPal Frete Fácil
-            case 'UPS':
-                //código para calcular frete com UPS
-        }
-    }
-
+}
+```
 
 Isso é péssimo, primeiro pois a cada edição, um bug em potencial é adicionado ao código. Segundo, pois a dificuldade em testar o código nos deixa no escuro sobre os possíveis bugs. Além disso, a cada nova adição de um prestador de serviço, o método `ShoppingCart::getShippingAmount()` assume a responsabilidade sobre a lógica do cálculo das dimensões da embalagem e frete.
 
@@ -194,380 +197,392 @@ Como o princípio de design O.C.P. nos diz que ninguém deve ter autorização p
 
 ### O teste:
 
-    <?php
-    namespace Neto\Commerce;
+```php
+<?php
+namespace Neto\Commerce;
 
-    class ShoppingCartTest extends \PHPUnit_Framework_TestCase
+class ShoppingCartTest extends \PHPUnit_Framework_TestCase
+{
+    /**
+     * @testdox Initial value for ShoppingCart::count() will be zero
+     */
+    public function testInitialItemCountInTheCartIsZero()
     {
-        /**
-         * @testdox Initial value for ShoppingCart::count() will be zero
-         */
-        public function testInitialItemCountInTheCartIsZero()
-        {
-            $cart = new ShoppingCart();
+        $cart = new ShoppingCart();
 
-            $this->assertCount(0, $cart);
-        }
-
-        /**
-         * @testdox Adding an item to shopping cart with ShoppingCart::addItem(Product $product, $quantity = 1) will increase the item count.
-         */
-        public function testAddingAnItemToShoppingCartWillIncreaseTheItemCount()
-        {
-            $cart = new ShoppingCart();
-
-            $this->assertCount(0, $cart);
-
-            $cart->addItem(new Product(123, 'item 0', 100, 1, 2, 15, 30));
-
-            $this->assertCount(1, $cart);
-
-            $cart->addItem(new Product(234, 'item 1', 100, 1, 2, 15, 30));
-
-            $this->assertCount(2, $cart);
-        }
-
-        /**
-         * @testdox Adding the same item twice to shopping cart will not change the item count.
-         */
-        public function testAddingTheSameItemTwiceToShoppingCartWillNotChangeTheItemCount()
-        {
-            $cart = new ShoppingCart();
-
-            $this->assertCount(0, $cart);
-
-            $cart->addItem(new Product(123, 'item 0', 100, 1, 2, 15, 30));
-
-            $this->assertCount(1, $cart);
-
-            $cart->addItem(new Product(123, 'item 0', 100, 1, 2, 15, 30));
-
-            $this->assertCount(1, $cart);
-        }
-
-        /**
-         * @testdox ShoppingCart::getItemQuantity($productId) will return zero if the product was not added to the shopping cart.
-         */
-        public function testGetProductQuantityWillReturnZeroIfTheProductWasNotAddedToTheShoppingCart()
-        {
-            $cart = new ShoppingCart();
-
-            $this->assertEquals(0, $cart->getItemQuantity(123));
-        }
-
-        /**
-         * @testdox Adding the same item twice to shopping cart will increase its quantity
-         */
-        public function testAddingTheSameItemTwiceToShoppingCartWillIncreaseItsQuantity()
-        {
-            $product = new Product(123, 'item 0', 100, 1, 2, 15, 30);
-            $productId = $product->getProductId();
-
-            $cart = new ShoppingCart();
-
-            $this->assertEquals(0, $cart->getItemQuantity($productId));
-
-            $cart->addItem($product);
-
-            $this->assertEquals(1, $cart->getItemQuantity($productId));
-
-            $cart->addItem($product);
-
-            $this->assertEquals(2, $cart->getItemQuantity($productId));
-        }
-
-        /**
-         * @expectedException \UnexpectedValueException
-         * @testdox ShoppingCart::getItemPrice($productId) will throw an exception if product was not found in the cart.
-         */
-        public function testGetItemPriceWillThrowAnExceptionIfProductWasNotFoundInTheCart()
-        {
-            $cart = new ShoppingCart();
-
-            $cart->getItemPrice(123);
-        }
-
-        /**
-         * @testdox ShoppingCart::getItemPrice($productId) will return the product price.
-         */
-        public function testGetItemPriceWillReturnTheProductPrice()
-        {
-            $productPrice = 100;
-            $product = new Product(123, 'item 0', $productPrice, 1, 2, 15, 30);
-            $productId = $product->getProductId();
-            $cart = new ShoppingCart();
-
-            $cart->addItem($product);
-
-            $this->assertEquals($productPrice, $cart->getItemPrice($productId));
-        }
-
-        /**
-         * @expectedException \UnexpectedValueException
-         * @testdox ShoppingCart::getItemAmount($productId) will throw an exception if product was not found in the cart.
-         */
-        public function testGetItemAmountWillThrowAnExceptionIfProductWasNotFoundInTheCart()
-        {
-            $cart = new ShoppingCart();
-
-            $cart->getItemAmount(123);
-        }
-
-        /**
-         * @testdox ShoppingCart::getItemAmount($productId) will return the product price multiplied by its quantity.
-         */
-        public function testGetItemAmountWillReturnTheProductPriceMultipliedByItsQuantity()
-        {
-            $productPrice = 100;
-            $quantity = 5;
-            $product = new Product(123, 'item 0', $productPrice, 1, 2, 15, 30);
-            $productId = $product->getProductId();
-            $cart = new ShoppingCart();
-
-            $cart->addItem($product, $quantity);
-
-            $this->assertEquals($productPrice * $quantity,
-                                $cart->getItemAmount($productId));
-        }
-
-        /**
-         * @testdox ShoppingCart::getItemTotal() will return the sum of all product price multiplied by its quantity in the cart.
-         */
-        public function testGetItemTotalWillReturnTheSumOfAllItemsInTheCart()
-        {
-            $cart = new ShoppingCart();
-
-            $this->assertEquals(0, $cart->getItemTotal());
-
-            $cart->addItem(new Product(123, 'item 0', 100, 1, 2, 15, 30), 2);
-            $cart->addItem(new Product(234, 'item 1', 100, 1, 2, 15, 30), 2);
-
-            $this->assertEquals(400, $cart->getItemTotal());
-        }
-
-        /**
-         * @testdox ShoppingCart::getIterator() will return an \Iterator with all products in the cart.
-         */
-        public function testGetIteratorWillReturnAnIteratorWithAllProductsInTheCart()
-        {
-            $products = array(
-                new Product(123, 'item 1', 100, 1, 2, 15, 30),
-                new Product(456, 'item 2', 100, 1, 2, 15, 30),
-                new Product(789, 'item 3', 100, 1, 2, 15, 30)
-            );
-
-            $cart = new ShoppingCart();
-
-            foreach ($products as $product) {
-                $cart->addItem($product);
-            }
-
-            $iterator = $cart->getIterator();
-            $iterator->rewind();
-
-            $this->assertInstanceOf('\Iterator', $iterator);
-
-            for ($i = 0, $t = count($products); $i < $t; ++$i, $iterator->next()) {
-                $this->assertSame($products[$i], $iterator->current());
-            }
-
-            $this->assertFalse($iterator->valid());
-        }
+        $this->assertCount(0, $cart);
     }
+
+    /**
+     * @testdox Adding an item to shopping cart with ShoppingCart::addItem(Product $product, $quantity = 1) will increase the item count.
+     */
+    public function testAddingAnItemToShoppingCartWillIncreaseTheItemCount()
+    {
+        $cart = new ShoppingCart();
+
+        $this->assertCount(0, $cart);
+
+        $cart->addItem(new Product(123, 'item 0', 100, 1, 2, 15, 30));
+
+        $this->assertCount(1, $cart);
+
+        $cart->addItem(new Product(234, 'item 1', 100, 1, 2, 15, 30));
+
+        $this->assertCount(2, $cart);
+    }
+
+    /**
+     * @testdox Adding the same item twice to shopping cart will not change the item count.
+     */
+    public function testAddingTheSameItemTwiceToShoppingCartWillNotChangeTheItemCount()
+    {
+        $cart = new ShoppingCart();
+
+        $this->assertCount(0, $cart);
+
+        $cart->addItem(new Product(123, 'item 0', 100, 1, 2, 15, 30));
+
+        $this->assertCount(1, $cart);
+
+        $cart->addItem(new Product(123, 'item 0', 100, 1, 2, 15, 30));
+
+        $this->assertCount(1, $cart);
+    }
+
+    /**
+     * @testdox ShoppingCart::getItemQuantity($productId) will return zero if the product was not added to the shopping cart.
+     */
+    public function testGetProductQuantityWillReturnZeroIfTheProductWasNotAddedToTheShoppingCart()
+    {
+        $cart = new ShoppingCart();
+
+        $this->assertEquals(0, $cart->getItemQuantity(123));
+    }
+
+    /**
+     * @testdox Adding the same item twice to shopping cart will increase its quantity
+     */
+    public function testAddingTheSameItemTwiceToShoppingCartWillIncreaseItsQuantity()
+    {
+        $product = new Product(123, 'item 0', 100, 1, 2, 15, 30);
+        $productId = $product->getProductId();
+
+        $cart = new ShoppingCart();
+
+        $this->assertEquals(0, $cart->getItemQuantity($productId));
+
+        $cart->addItem($product);
+
+        $this->assertEquals(1, $cart->getItemQuantity($productId));
+
+        $cart->addItem($product);
+
+        $this->assertEquals(2, $cart->getItemQuantity($productId));
+    }
+
+    /**
+     * @expectedException \UnexpectedValueException
+     * @testdox ShoppingCart::getItemPrice($productId) will throw an exception if product was not found in the cart.
+     */
+    public function testGetItemPriceWillThrowAnExceptionIfProductWasNotFoundInTheCart()
+    {
+        $cart = new ShoppingCart();
+
+        $cart->getItemPrice(123);
+    }
+
+    /**
+     * @testdox ShoppingCart::getItemPrice($productId) will return the product price.
+     */
+    public function testGetItemPriceWillReturnTheProductPrice()
+    {
+        $productPrice = 100;
+        $product = new Product(123, 'item 0', $productPrice, 1, 2, 15, 30);
+        $productId = $product->getProductId();
+        $cart = new ShoppingCart();
+
+        $cart->addItem($product);
+
+        $this->assertEquals($productPrice, $cart->getItemPrice($productId));
+    }
+
+    /**
+     * @expectedException \UnexpectedValueException
+     * @testdox ShoppingCart::getItemAmount($productId) will throw an exception if product was not found in the cart.
+     */
+    public function testGetItemAmountWillThrowAnExceptionIfProductWasNotFoundInTheCart()
+    {
+        $cart = new ShoppingCart();
+
+        $cart->getItemAmount(123);
+    }
+
+    /**
+     * @testdox ShoppingCart::getItemAmount($productId) will return the product price multiplied by its quantity.
+     */
+    public function testGetItemAmountWillReturnTheProductPriceMultipliedByItsQuantity()
+    {
+        $productPrice = 100;
+        $quantity = 5;
+        $product = new Product(123, 'item 0', $productPrice, 1, 2, 15, 30);
+        $productId = $product->getProductId();
+        $cart = new ShoppingCart();
+
+        $cart->addItem($product, $quantity);
+
+        $this->assertEquals($productPrice * $quantity,
+                            $cart->getItemAmount($productId));
+    }
+
+    /**
+     * @testdox ShoppingCart::getItemTotal() will return the sum of all product price multiplied by its quantity in the cart.
+     */
+    public function testGetItemTotalWillReturnTheSumOfAllItemsInTheCart()
+    {
+        $cart = new ShoppingCart();
+
+        $this->assertEquals(0, $cart->getItemTotal());
+
+        $cart->addItem(new Product(123, 'item 0', 100, 1, 2, 15, 30), 2);
+        $cart->addItem(new Product(234, 'item 1', 100, 1, 2, 15, 30), 2);
+
+        $this->assertEquals(400, $cart->getItemTotal());
+    }
+
+    /**
+     * @testdox ShoppingCart::getIterator() will return an \Iterator with all products in the cart.
+     */
+    public function testGetIteratorWillReturnAnIteratorWithAllProductsInTheCart()
+    {
+        $products = array(
+            new Product(123, 'item 1', 100, 1, 2, 15, 30),
+            new Product(456, 'item 2', 100, 1, 2, 15, 30),
+            new Product(789, 'item 3', 100, 1, 2, 15, 30)
+        );
+
+        $cart = new ShoppingCart();
+
+        foreach ($products as $product) {
+            $cart->addItem($product);
+        }
+
+        $iterator = $cart->getIterator();
+        $iterator->rewind();
+
+        $this->assertInstanceOf('\Iterator', $iterator);
+
+        for ($i = 0, $t = count($products); $i < $t; ++$i, $iterator->next()) {
+            $this->assertSame($products[$i], $iterator->current());
+        }
+
+        $this->assertFalse($iterator->valid());
+    }
+}
+```
 
 Como podemos ver, não existe um teste para o cálculo do frete. Mesmo porque, daquela forma, não há como testá-lo. Vamos começar a refatoração, garantindo que ele seja testável. Isso será feito através da injeção da dependência:
 
-    <?php
-    namespace Neto\Commerce;
+```php
+<?php
+namespace Neto\Commerce;
 
-    class ShoppingCartTest extends \PHPUnit_Framework_TestCase
+class ShoppingCartTest extends \PHPUnit_Framework_TestCase
+{
+    //...
+
+    /**
+     * @testdox ShoppingCart::getShippingAmount() will return zero if cart is empty.
+     */
+    public function testGetShippingAmountWillReturnZeroIfCartIfEmpty()
     {
-        //...
+        $shippingMethod = $this->getMock('\Neto\Commerce\Shipping\ShippingMethod',
+                                         array('getShippingAmount'));
 
-        /**
-         * @testdox ShoppingCart::getShippingAmount() will return zero if cart is empty.
-         */
-        public function testGetShippingAmountWillReturnZeroIfCartIfEmpty()
-        {
-            $shippingMethod = $this->getMock('\Neto\Commerce\Shipping\ShippingMethod',
-                                             array('getShippingAmount'));
+        $cart = new ShoppingCart();
 
-            $cart = new ShoppingCart();
-
-            $this->assertEquals(0, $cart->getShippingAmount($shippingMethod,
-                                                            '14400000',
-                                                            '01000000'));
-        }
+        $this->assertEquals(0, $cart->getShippingAmount($shippingMethod,
+                                                        '14400000',
+                                                        '01000000'));
     }
+}
+```
 
 A partir de agora, já começamos a ter o código testável. Com a inversão da dependência, nosso ShoppingCart não será mais responsável nem pelo cálculo das dimensões da embalagem, nem pela criação da instância da ECT. O interessante dessa primeira refatoração, é que o teste vai passar, mesmo não tendo refatorado ainda o código do ShoppingCart. Para finalizar o carrinho, tudo o que precisamos é verificar se o carrinho está fazendo a chamada corretamente:
 
-    <?php
-    namespace Neto\Commerce;
+```php
+<?php
+namespace Neto\Commerce;
 
-    class ShoppingCartTest extends \PHPUnit_Framework_TestCase
+class ShoppingCartTest extends \PHPUnit_Framework_TestCase
+{
+    //...
+
+    /**
+     * @testdox ShoppingCart::getShippingAmount() will return zero if cart is empty.
+     */
+    public function testGetShippingAmountWillReturnZeroIfCartIfEmpty()
     {
-        //...
+        $shippingMethod = $this->getMock('\Neto\Commerce\Shipping\ShippingMethod',
+                                         array('getShippingAmount'));
 
-        /**
-         * @testdox ShoppingCart::getShippingAmount() will return zero if cart is empty.
-         */
-        public function testGetShippingAmountWillReturnZeroIfCartIfEmpty()
-        {
-            $shippingMethod = $this->getMock('\Neto\Commerce\Shipping\ShippingMethod',
-                                             array('getShippingAmount'));
+        $cart = new ShoppingCart();
 
-            $cart = new ShoppingCart();
-
-            $this->assertEquals(0, $cart->getShippingAmount($shippingMethod,
-                                                            '14400000',
-                                                            '01000000'));
-        }
-
-        /**
-         * @testdox ShoppingCart::getShippingAmount() will call ShippingMethod::getShippingAmount() to calculates the shipping amount.
-         */
-        public function testGetShippingAmountWillCallShippingMethodToCalculatesTheShippingAmount()
-        {
-            $cart = new ShoppingCart();
-            $cart->addItem(new Product(123, 'item 0', 100, 1, 2, 15, 30), 2);
-
-            $shippingFrom = '14400000';
-            $shippingTo = '01000000';
-
-            $shippingMethod = $this->getMock('\Neto\Commerce\Shipping\ShippingMethod',
-                                             array('getShippingAmount'));
-
-            $shippingMethod->expects($this->at(0))
-                           ->method('getShippingAmount')
-                           ->with($cart, $shippingFrom, $shippingTo);
-
-            $cart->getShippingAmount($shippingMethod,
-                                     $shippingFrom,
-                                     $shippingTo);
-        }
+        $this->assertEquals(0, $cart->getShippingAmount($shippingMethod,
+                                                        '14400000',
+                                                        '01000000'));
     }
+
+    /**
+     * @testdox ShoppingCart::getShippingAmount() will call ShippingMethod::getShippingAmount() to calculates the shipping amount.
+     */
+    public function testGetShippingAmountWillCallShippingMethodToCalculatesTheShippingAmount()
+    {
+        $cart = new ShoppingCart();
+        $cart->addItem(new Product(123, 'item 0', 100, 1, 2, 15, 30), 2);
+
+        $shippingFrom = '14400000';
+        $shippingTo = '01000000';
+
+        $shippingMethod = $this->getMock('\Neto\Commerce\Shipping\ShippingMethod',
+                                         array('getShippingAmount'));
+
+        $shippingMethod->expects($this->at(0))
+                       ->method('getShippingAmount')
+                       ->with($cart, $shippingFrom, $shippingTo);
+
+        $cart->getShippingAmount($shippingMethod,
+                                 $shippingFrom,
+                                 $shippingTo);
+    }
+}
+```
 
 Vamos refatorar o carrinho agora:
 
-    <?php
-    namespace Neto\Commerce;
+```php
+<?php
+namespace Neto\Commerce;
 
-    use Neto\Commerce\Shipping\ShippingMethod;
+use Neto\Commerce\Shipping\ShippingMethod;
 
-    class ShoppingCart implements \Countable, \IteratorAggregate
+class ShoppingCart implements \Countable, \IteratorAggregate
+{
+    //...
+
+    public function getShippingAmount(ShippingMethod $shippingMethod,
+                                      $shippingFrom,
+                                      $shippingTo)
     {
-        //...
-
-        public function getShippingAmount(ShippingMethod $shippingMethod,
-                                          $shippingFrom,
-                                          $shippingTo)
-        {
-            if ($this->count() == 0) {
-                return 0;
-            }
-
-            return $shippingMethod->getShippingAmount($this,
-                                                      $shippingFrom,
-                                                      $shippingTo);
+        if ($this->count() == 0) {
+            return 0;
         }
+
+        return $shippingMethod->getShippingAmount($this,
+                                                  $shippingFrom,
+                                                  $shippingTo);
     }
+}
+```
 
 Como podemos ver, o código ficou muito mais elegante agora. Não existe conhecimento específico nenhum. Tudo o que o método `ShoppingCart::getShippingAmount()` faz, é delegar o cálculo para um outro participante. Ainda, para evitar qualquer tipo de acoplamento, o carrinho passa a si mesmo, para o participante `ShippingMethod`, para que as decisões sobre como calcular o frete sejam feitas exclusivamente pelo novo participante. Com o teste passando, podemos criar a interface `ShippingMethod`:
 
-    <?php
-    namespace Neto\Commerce\Shipping;
+```php
+<?php
+namespace Neto\Commerce\Shipping;
 
-    use Neto\Commerce\ShoppingCart;
+use Neto\Commerce\ShoppingCart;
 
-    interface ShippingMethod
-    {
-        public function getShippingAmount(ShoppingCart $shoppingCart,
-                                          $shippingFrom,
-                                          $shippingTo);
-    }
+interface ShippingMethod
+{
+    public function getShippingAmount(ShoppingCart $shoppingCart,
+                                      $shippingFrom,
+                                      $shippingTo);
+}
+```
 
 Agora, podemos implementar o participante ECT, ou qualquer um outro:
 
-    <?php
-    namespace Neto\Commerce\Shipping;
+```php
+<?php
+namespace Neto\Commerce\Shipping;
 
-    use Neto\Commerce\ShoppingCart;
+use Neto\Commerce\ShoppingCart;
 
-    class ECT implements ShippingMethod
+class ECT implements ShippingMethod
+{
+    const ENDPOINT = 'http://ws.correios.com.br/calculador/CalcPrecoPrazo.asmx';
+    const SEDEX = 40010;
+
+    private $weight = 0;
+    private $height = 0;
+    private $width = 0;
+    private $length = 0;
+
+    private function calcPackageDimensions(ShoppingCart $shoppingCart)
     {
-        const ENDPOINT = 'http://ws.correios.com.br/calculador/CalcPrecoPrazo.asmx';
-        const SEDEX = 40010;
+        foreach ($shoppingCart as $productId => $item) {
+            $quantity = $shoppingCart->getItemQuantity($productId);
 
-        private $weight = 0;
-        private $height = 0;
-        private $width = 0;
-        private $length = 0;
+            $this->weight += $quantity * $item->getProductWeight();
+            $this->height += $quantity * $item->getProductHeight();
 
-        private function calcPackageDimensions(ShoppingCart $shoppingCart)
-        {
-            foreach ($shoppingCart as $productId => $item) {
-                $quantity = $shoppingCart->getItemQuantity($productId);
+            $currentWidth = $item->getProductWidth();
+            $currentLength = $item->getProductLength();
 
-                $this->weight += $quantity * $item->getProductWeight();
-                $this->height += $quantity * $item->getProductHeight();
-
-                $currentWidth = $item->getProductWidth();
-                $currentLength = $item->getProductLength();
-
-                if ($currentWidth > $this->width) {
-                    $this->width = $currentWidth;
-                }
-
-                if ($currentLength > $this->length) {
-                    $this->length = $currentLength;
-                }
-            }
-        }
-
-        public function createSoapClient()
-        {
-            return new \SoapClient(static::ENDPOINT. '?wsdl',
-                                   array('trace' => true,
-                                         'exceptions' => true,
-                                         'style' => SOAP_DOCUMENT,
-                                         'use' => SOAP_LITERAL,
-                                         'soap_version' => SOAP_1_1,
-                                         'encoding' => 'UTF-8'));
-        }
-
-        public function getShippingAmount(ShoppingCart $shoppingCart,
-                                          $shippingFrom,
-                                          $shippingTo)
-        {
-            $this->calcPackageDimensions($shoppingCart);
-
-            $request = new \stdClass();
-            $request->nCdEmpresa = '';
-            $request->sDsSenha = '';
-            $request->sCepOrigem = $shippingFrom;
-            $request->sCepDestino = $shippingTo;
-            $request->nVlPeso = $this->weight;
-            $request->nCdFormato = 1;
-            $request->nVlComprimento = $this->length;
-            $request->nVlAltura = $this->height;
-            $request->nVlLargura = $this->width;
-            $request->sCdMaoPropria = 'n';
-            $request->nVlValorDeclarado = 0;
-            $request->sCdAvisoRecebimento = 'n';
-            $request->nCdServico = ECT::SEDEX;
-            $request->nVlDiametro = 0;
-
-            $response = $this->createSoapClient()->CalcPrecoPrazo($request);
-            $cServico = $response->CalcPrecoPrazoResult->Servicos->cServico;
-
-            if (isset($cServico->Erro) && $cServico->Erro != 0) {
-                throw new \RuntimeException($cServico->MsgErro, $cServico->Erro);
+            if ($currentWidth > $this->width) {
+                $this->width = $currentWidth;
             }
 
-            return $cServico->Valor;
+            if ($currentLength > $this->length) {
+                $this->length = $currentLength;
+            }
         }
     }
+
+    public function createSoapClient()
+    {
+        return new \SoapClient(static::ENDPOINT. '?wsdl',
+                               array('trace' => true,
+                                     'exceptions' => true,
+                                     'style' => SOAP_DOCUMENT,
+                                     'use' => SOAP_LITERAL,
+                                     'soap_version' => SOAP_1_1,
+                                     'encoding' => 'UTF-8'));
+    }
+
+    public function getShippingAmount(ShoppingCart $shoppingCart,
+                                      $shippingFrom,
+                                      $shippingTo)
+    {
+        $this->calcPackageDimensions($shoppingCart);
+
+        $request = new \stdClass();
+        $request->nCdEmpresa = '';
+        $request->sDsSenha = '';
+        $request->sCepOrigem = $shippingFrom;
+        $request->sCepDestino = $shippingTo;
+        $request->nVlPeso = $this->weight;
+        $request->nCdFormato = 1;
+        $request->nVlComprimento = $this->length;
+        $request->nVlAltura = $this->height;
+        $request->nVlLargura = $this->width;
+        $request->sCdMaoPropria = 'n';
+        $request->nVlValorDeclarado = 0;
+        $request->sCdAvisoRecebimento = 'n';
+        $request->nCdServico = ECT::SEDEX;
+        $request->nVlDiametro = 0;
+
+        $response = $this->createSoapClient()->CalcPrecoPrazo($request);
+        $cServico = $response->CalcPrecoPrazoResult->Servicos->cServico;
+
+        if (isset($cServico->Erro) && $cServico->Erro != 0) {
+            throw new \RuntimeException($cServico->MsgErro, $cServico->Erro);
+        }
+
+        return $cServico->Valor;
+    }
+}
+```
 
 ## Tudo se resume em abstração
 
